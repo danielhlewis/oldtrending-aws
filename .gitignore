@@ -9,3 +9,6 @@ __pycache__
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+
+rds_config.py
+test
