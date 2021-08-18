@@ -12,8 +12,9 @@ from aws_cdk import (
   aws_lambda as _lambda,
   aws_sqs as sqs,
   aws_sns_subscriptions as subs,
-  aws_lambda_event_sources as sqs_sources,
-  aws_s3 as s3
+  aws_lambda_event_sources as lambda_sources,
+  aws_s3 as s3,
+  aws_efs as efs,
 )
 
 from aws_cdk.aws_lambda_python import PythonFunction
@@ -34,11 +35,20 @@ class NewspaperCdkStack(cdk.Stack):
         #   self, id='VPC', vpc_id='vpc-018e3a7a57b052b8c',
         #   )
 
+        # Setup: Create common storage. We will put data on it like so:
+        # jp2/<date>/*.jp2
+        # converted/<date>/*.jpg
+        # converted/<date>/*-predictions.json
+        # resized/<date>/*.jpg
+        # resized/<date>/images.json
+        self.data_bucket = s3.Bucket(self, 'NewspaperDataPipeline')
+
         # Step 1: Check the database to find all of the pages to download
         pages_topic = self.buildGetPagesLambdaAndFriends()
-        # Step 2: For each page, download it and convert from jp2 to jpg
+        # Step 2: For each page, download it
         downloaded_topic = self.buildDownloadJP2AndFriends(pages_topic)
-
+        # Step 3: Once the file is downloaded, convert from jp2 to jpg
+        self.buildConvertJp2()
 
 
     def buildGetPagesLambdaAndFriends(self):
@@ -58,6 +68,7 @@ class NewspaperCdkStack(cdk.Stack):
         environment= {
           'SNS_TOPIC_ARN': pages_topic.topic_arn,
         },
+        timeout=core.Duration.seconds(10)
       )
 
       pages_topic.grant_publish(find_pages_lambda)
@@ -70,6 +81,33 @@ class NewspaperCdkStack(cdk.Stack):
         )
         input_topic.add_subscription(subs.SqsSubscription(pages_sqs))
 
+        # We will publish the names of each file we download to an SNS topic
+        output_topic = sns.Topic(
+          self, 'DownloadedFiles',
+        )
+
+        download_jp2_lambda = PythonFunction(
+          self, 'DownloadJP2',
+          entry='download_jp2_lambda',
+          index='download_jp2.py',
+          handler='handler',
+          environment= {
+            'SNS_TOPIC_ARN': output_topic.topic_arn,
+            'DATA_BUCKET': self.data_bucket.bucket_name,
+          },
+          timeout=core.Duration.seconds(10)
+        )
+
+        # Give the lambda permission to write to the destination bucket
+        self.data_bucket.grant_read_write(download_jp2_lambda)
+        output_topic.grant_publish(download_jp2_lambda)
+
+        # Connect the lambda to the input sqs queue
+        download_jp2_lambda.add_event_source(lambda_sources.SqsEventSource(pages_sqs))
+
+        return output_topic
+
+    def buildConvertJp2(self):
         # We need imagemagick to convert jp2 files into jpeg files
         #  Since it isn't included by default, we need to build it as
         #  a layer.  It should already exist as a zip file (if it has
@@ -85,34 +123,27 @@ class NewspaperCdkStack(cdk.Stack):
                                _lambda.Runtime.NODEJS,]
         )
 
-        # We will need an s3 bucket to download to, build it here
-        dest_bucket = s3.Bucket(self, 'DownloadBucket')
-
-        # We will publish the names of each file we download to an SNS topic
-        output_topic = sns.Topic(
-          self, 'DownloadedFiles',
-        )
-
-        # Now that we have the imagemagick layer and an output bucket,
-        #  we can build the download lambda on top of it
-        download_jp2_lambda = PythonFunction(
-          self, 'DownloadJP2',
-          entry='download_jp2_lambda',
-          index='download_jp2.py',
+        # Now that we have the imagemagick layer, we can build the convert lambda on top of it
+        convert_jp2_lambda = PythonFunction(
+          self, 'ConvertJP2',
+          entry='convert_jp2_lambda',
+          index='convert_jp2.py',
           handler='handler',
           layers=[imagemagick_layer],
           environment= {
-            'SNS_TOPIC_ARN': output_topic.topic_arn,
-            'DESTINATION_BUCKET': dest_bucket.bucket_arn,
+            'DATA_BUCKET': self.data_bucket.bucket_name,
           },
+          timeout=core.Duration.minutes(1),
+          memory_size=512,
         )
 
         # Give the lambda permission to write to the destination bucket
-        dest_bucket.grant_read_write(download_jp2_lambda)
-        output_topic.grant_publish(download_jp2_lambda)
+        self.data_bucket.grant_read_write(convert_jp2_lambda)
+        
+        # Connect the lambda to the s3 bucket
+        convert_jp2_lambda.add_event_source(lambda_sources.S3EventSource(self.data_bucket,
+          events=[s3.EventType.OBJECT_CREATED],
+          filters=[s3.NotificationKeyFilter(prefix="jp2/", suffix="jp2")],
+        ))
 
-        # Connect the lambda to the input sqs queue
-        download_jp2_lambda.add_event_source(sqs_sources.SqsEventSource(pages_sqs))
-
-        return {"Output_Bucket": dest_bucket,
-                "Output_Topic": output_topic}
+        return

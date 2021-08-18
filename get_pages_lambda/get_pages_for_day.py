@@ -69,7 +69,9 @@ def getFrontPages(target):
     date_edition = ''.join(pub_date.split('-')) + edition_seq_num
     # Build the parameters that we will pass forward in the message
     src = "%s/%s/data/%s/%s/%s/%s" % (base_url, batch, lccn, subfolder, date_edition, filename)
-    dest = "/data/images/%s/%s-%s-%s-%s-1" % (target, date_edition, batch, lccn, subfolder)
+    # In order to ensure that we don't stomp on any other files, give each file a unique name from
+    #  a combination of the info about it
+    dest = "%s-%s-%s-%s-1.jp2" % (date_edition, batch, lccn, subfolder)
     info = {'batch': batch, 'lccn': lccn, 'pub_date': pub_date, 'date_edition': date_edition,
             'edition_seq_num': edition_seq_num, 'page_seq_num': page_seq_num, 
             'subfolder': subfolder, 'filename': filename}
@@ -98,6 +100,11 @@ def handler(event, context):
         'body': 'Hello, I have fetched {}\n'.format(len(results['data']))
     }
 
+"""
+Because CDK creates the topic, we don't know what the ARN will be.
+If we are running locally and want to actually send messages to the topic on AWS,
+we need to look it up.
+"""
 def find_topic_arn_from_local():
   # Find the correct sns topic if we are running locally
   next_token = ''
@@ -192,6 +199,7 @@ if __name__ == "__main__":
     message = response['Messages'][0]
     body = json.loads(message['Body'])
     original = json.loads(body['Message'])
+    print('{}'.format(message))
     print('{}'.format(original))
     if results['data'][0] == original:
       print("Pass!")
