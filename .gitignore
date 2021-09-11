@@ -12,3 +12,5 @@ cdk.out
 
 rds_config.py
 test
+# The trained weights for the neural network, it's a pretty big file
+model_final.pth

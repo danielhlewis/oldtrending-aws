@@ -1,58 +1,18 @@
 
-# Welcome to your CDK Python project!
+# Backend pipeline for spin.oldtrending.com
 
-This is a blank project for Python development with CDK.
+This is the backend code that powers spin.oldtrending.com, a website that dramatically displays top headlines from 100 years ago.
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+The page itself is very simple HTML and vanilla javascript, but it requires a fair bit of processing on the backend to identify and prepare the images to be shown on any given day.
 
-This project is set up like a standard Python project.  The initialization
-process also creates a virtualenv within this project, stored under the `.venv`
-directory.  To create the virtualenv it assumes that there is a `python3`
-(or `python` for Windows) executable in your path with access to the `venv`
-package. If for any reason the automatic creation of the virtualenv fails,
-you can create the virtualenv manually.
+Two versions of this pipeline exist, one that packages the entire workflow into a single docker-compose project that can run locally on a system, and a second one that runs entirely on AWS.  This is the AWS version.  While either of the pipelines will work equally well, in practice, the local docker version is preferred, since it is basically free to run.  The AWS version costs a bit of money each day to maintain a ~4gb ECS image and to run an ec2 instance that includes a GPU.
 
-To manually create a virtualenv on MacOS and Linux:
+Since it uses CDK, the entire project can be deployed onto AWS with a minimal amount of setup.
 
-```
-$ python -m venv .venv
-```
-
-After the init process completes and the virtualenv is created, you can use the following
-step to activate your virtualenv.
-
-```
-$ source .venv/bin/activate
-```
-
-If you are a Windows platform, you would activate the virtualenv like this:
-
-```
-% .venv\Scripts\activate.bat
-```
-
-Once the virtualenv is activated, you can install the required dependencies.
-
-```
-$ pip install -r requirements.txt
-```
-
-At this point you can now synthesize the CloudFormation template for this code.
-
-```
-$ cdk synth
-```
-
-To add additional dependencies, for example other CDK libraries, just add
-them to your `setup.py` file and rerun the `pip install -r requirements.txt`
-command.
-
-## Useful commands
-
- * `cdk ls`          list all stacks in the app
- * `cdk synth`       emits the synthesized CloudFormation template
- * `cdk deploy`      deploy this stack to your default AWS account/region
- * `cdk diff`        compare deployed stack with current state
- * `cdk docs`        open CDK documentation
-
-Enjoy!
+1) Create an RDS database
+1) Create an rds_config.py file with the following information
+db_host = "xxx.rds.amazonaws.com"
+db_username = ""
+db_password = ""
+db_name = "manifest" 
+2) Request a quota increase for G type ec2 instances to at least 1 (default is 0)

@@ -14,7 +14,13 @@ from aws_cdk import (
   aws_sns_subscriptions as subs,
   aws_lambda_event_sources as lambda_sources,
   aws_s3 as s3,
-  aws_efs as efs,
+  aws_ecs as ecs,
+  aws_ecr_assets as ecr_assets,
+  aws_s3_notifications as s3_notifications,
+  aws_ec2 as ec2,
+  aws_iam as iam,
+  aws_autoscaling as autoscaling,
+  aws_logs as logs,
 )
 
 from aws_cdk.aws_lambda_python import PythonFunction
@@ -30,10 +36,11 @@ class NewspaperCdkStack(cdk.Stack):
         #   instance_identifier='newspaper-db',
         # )
 
-        # # Find the existing VPC to add to
-        # old_trending_vpc = ec2.Vpc.from_lookup(
-        #   self, id='VPC', vpc_id='vpc-018e3a7a57b052b8c',
-        #   )
+        # Find the existing VPC to add to
+        # TODO - make new VPC
+        self.vpc = ec2.Vpc.from_lookup(
+          self, id='VPC', vpc_id='vpc-f1e6358c',
+          )
 
         # Setup: Create common storage. We will put data on it like so:
         # jp2/<date>/*.jp2
@@ -43,12 +50,33 @@ class NewspaperCdkStack(cdk.Stack):
         # resized/<date>/images.json
         self.data_bucket = s3.Bucket(self, 'NewspaperDataPipeline')
 
+        # We need imagemagick to convert jp2 files into jpeg files
+        #  Since it isn't included by default, we need to build it as
+        #  a layer.  It should already exist as a zip file (if it has
+        #  been built from the submodule 'imagemagick-aws-lambda-2')
+        #  so we just need to upload it
+        self.imagemagick_layer = _lambda.LayerVersion(
+          self, 'imagemagick',
+          code=_lambda.AssetCode('imagemagick-aws-lambda-2/build/layer.zip'),
+          compatible_runtimes=[_lambda.Runtime.PYTHON_3_8, 
+                               _lambda.Runtime.PYTHON_3_7, 
+                               _lambda.Runtime.PYTHON_3_6,
+                               _lambda.Runtime.PYTHON_2_7,
+                               _lambda.Runtime.NODEJS,]
+        )
+
         # Step 1: Check the database to find all of the pages to download
         pages_topic = self.buildGetPagesLambdaAndFriends()
         # Step 2: For each page, download it
         downloaded_topic = self.buildDownloadJP2AndFriends(pages_topic)
         # Step 3: Once the file is downloaded, convert from jp2 to jpg
         self.buildConvertJp2()
+        # Step 5: Create Image for Detectron
+        self.buildProcessPages()
+        # Step 6: Check for banner headlines and resize files that have them
+        shrink_queue = self.buildCheckHeadlines()
+        # Step 7: Shrink Files that have banner headlines to a reasonable size
+        self.buildShrinker(shrink_queue)
 
 
     def buildGetPagesLambdaAndFriends(self):
@@ -108,28 +136,13 @@ class NewspaperCdkStack(cdk.Stack):
         return output_topic
 
     def buildConvertJp2(self):
-        # We need imagemagick to convert jp2 files into jpeg files
-        #  Since it isn't included by default, we need to build it as
-        #  a layer.  It should already exist as a zip file (if it has
-        #  been built from the submodule 'imagemagick-aws-lambda-2')
-        #  so we just need to upload it
-        imagemagick_layer = _lambda.LayerVersion(
-          self, 'imagemagick',
-          code=_lambda.AssetCode('imagemagick-aws-lambda-2/build/layer.zip'),
-          compatible_runtimes=[_lambda.Runtime.PYTHON_3_8, 
-                               _lambda.Runtime.PYTHON_3_7, 
-                               _lambda.Runtime.PYTHON_3_6,
-                               _lambda.Runtime.PYTHON_2_7,
-                               _lambda.Runtime.NODEJS,]
-        )
-
         # Now that we have the imagemagick layer, we can build the convert lambda on top of it
         convert_jp2_lambda = PythonFunction(
           self, 'ConvertJP2',
           entry='convert_jp2_lambda',
           index='convert_jp2.py',
           handler='handler',
-          layers=[imagemagick_layer],
+          layers=[self.imagemagick_layer],
           environment= {
             'DATA_BUCKET': self.data_bucket.bucket_name,
           },
@@ -145,5 +158,177 @@ class NewspaperCdkStack(cdk.Stack):
           events=[s3.EventType.OBJECT_CREATED],
           filters=[s3.NotificationKeyFilter(prefix="jp2/", suffix="jp2")],
         ))
+
+        return
+
+    def buildProcessPages(self):
+      jpg_sns_topic = sns.Topic(self, 'JpgTopic')
+      self.data_bucket.add_event_notification(
+                          s3.EventType.OBJECT_CREATED, 
+                          s3_notifications.SnsDestination(jpg_sns_topic),
+                          s3.NotificationKeyFilter(prefix="converted/", suffix="jpg"),
+                          )
+
+      jpg_sqs_queue = sqs.Queue(self, 'JpgQueue')
+      jpg_sns_topic.add_subscription(subs.SqsSubscription(jpg_sqs_queue))
+
+      detectron_image = ecr_assets.DockerImageAsset(self, "Detectron", directory="process_pages")
+      print("{}".format(detectron_image))
+
+      log_group = logs.LogGroup(self, "LogGroup")
+      exec_bucket = s3.Bucket(self, "EcsLogs")
+
+      cluster = ecs.Cluster(self, "DetectronCluster", 
+                            vpc=self.vpc,
+                            execute_command_configuration={
+                              "log_configuration": {
+                                  "cloud_watch_log_group": log_group,
+                                  "s3_bucket": exec_bucket,
+                                  "s3_key_prefix": "exec-command-output"
+                              },
+                              "logging": ecs.ExecuteCommandLogging.OVERRIDE
+                            }
+                            )
+      # g4dn.xlarge seems to be the cheapest instance type with nvidia GPUs
+      # t2.micro lets you stay in the free tier
+      # t2.small is (one of) the cheapest with enough memory to hold the model
+      # cluster.add_capacity("DefaultAutoScalingGroupCapacity",
+      #     instance_type=ec2.InstanceType("t2.small"),
+      #     min_capacity=0,
+      #     desired_capacity=0,
+      #     max_capacity=1,
+      #     key_name='virginia',
+      # )
+      auto_scaling_group = autoscaling.AutoScalingGroup(self, "DetectronASG",
+          vpc=self.vpc,
+          instance_type=ec2.InstanceType("t2.small"),
+          machine_image=ecs.EcsOptimizedImage.amazon_linux2(),
+          min_capacity=0,
+          max_capacity=1,
+          instance_monitoring=autoscaling.Monitoring.BASIC,
+          key_name='virginia',
+          new_instances_protected_from_scale_in=False,
+      )
+      capacity_provider = ecs.AsgCapacityProvider(self, "AsgCapacityProvider",
+          auto_scaling_group=auto_scaling_group,
+          enable_managed_termination_protection=False,
+      )
+      cluster.add_asg_capacity_provider(capacity_provider)
+
+      task_definition = ecs.Ec2TaskDefinition(self, "TaskDef")
+
+      # container = task_definition.add_container("DefaultContainer",
+      #     image=ecs.ContainerImage.from_registry(detectron_image.image_uri),
+      #     environment= {
+      #       "SQS_URL": "{}".format(jpg_sqs_queue.queue_url)
+      #     },
+      #     memory_limit_mib=512,
+      # )
+      container = task_definition.add_container("DefaultContainer",
+          image=ecs.ContainerImage.from_asset("./process_pages"),
+          environment= {
+            "SQS_URL": "{}".format(jpg_sqs_queue.queue_url)
+          },
+          memory_limit_mib=1700,
+          logging=ecs.LogDrivers.aws_logs(stream_prefix="detectron"),
+      )
+
+      start_task_lambda = PythonFunction(
+        self, 'StartTask',
+        runtime=_lambda.Runtime.PYTHON_3_8,
+        entry='start_task_lambda',
+        index='start_task.py',
+        handler='handler',
+        environment= {
+          'CLUSTER_NAME': cluster.cluster_name,
+          'CONTAINER_ID': task_definition.default_container.container_name,
+          'TASK_ARN': task_definition.task_definition_arn,
+        },
+      )
+
+      task_definition.execution_role.add_to_policy(iam.PolicyStatement(
+        effect=iam.Effect.ALLOW,
+        resources=['*'],
+        actions=["sqs:DeleteMessage",
+                "sqs:ListQueues",
+                "sqs:GetQueueUrl",
+                "sqs:ListDeadLetterSourceQueues",
+                "sqs:DeleteMessageBatch",
+                "sqs:ReceiveMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:ListQueueTags"]
+      ))
+
+      task_definition.task_role.add_to_policy(iam.PolicyStatement(
+        effect=iam.Effect.ALLOW,
+        resources=['*'],
+        actions=["sqs:DeleteMessage",
+                "sqs:ListQueues",
+                "sqs:GetQueueUrl",
+                "sqs:ListDeadLetterSourceQueues",
+                "sqs:DeleteMessageBatch",
+                "sqs:ReceiveMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:ListQueueTags",
+                "s3:PutObject",
+                "s3:GetObject",]
+      ))
+
+      # arn_parts = task_definition.task_definition_arn.split(':')
+      # print(arn_parts)
+      # Connect the lambda to the s3 bucket
+      start_task_lambda.role.add_to_policy(iam.PolicyStatement(
+        effect=iam.Effect.ALLOW,
+        resources=['*'],
+        actions=['ecs:ListTasks'],
+      ))
+      start_task_lambda.add_event_source(lambda_sources.SnsEventSource(jpg_sns_topic))
+
+    def buildCheckHeadlines(self):
+        banner_queue = sqs.Queue(self, 'BannerHeadlines')
+
+        # Now that we have the imagemagick layer, we can build the convert lambda on top of it
+        check_headlines_lambda = PythonFunction(
+          self, 'CheckHeadlines',
+          entry='check_headlines_lambda',
+          index='check_headlines.py',
+          handler='handler',
+          environment= {
+            'DATA_BUCKET': self.data_bucket.bucket_name,
+            'BANNER_QUEUE_URL': banner_queue.queue_url,
+          },
+          timeout=core.Duration.seconds(10),
+          memory_size=128,
+        )
+
+        self.data_bucket.grant_read_write(check_headlines_lambda)
+        banner_queue.grant_send_messages(check_headlines_lambda)
+
+        # Connect the lambda to the s3 bucket
+        check_headlines_lambda.add_event_source(lambda_sources.S3EventSource(self.data_bucket,
+          events=[s3.EventType.OBJECT_CREATED],
+          filters=[s3.NotificationKeyFilter(prefix="converted/", suffix="-predictions.json")],
+        ))
+
+        return banner_queue
+
+    def buildShrinker(self, shrink_queue):
+        shrink_jpg_lambda = PythonFunction(
+          self, 'ShrinkJpg',
+          entry='shrink_jpg_lambda',
+          index='shrink_jpg.py',
+          handler='handler',
+          layers=[self.imagemagick_layer],
+          environment= {
+            'DATA_BUCKET': self.data_bucket.bucket_name,
+          },
+          timeout=core.Duration.seconds(30),
+          memory_size=512,
+        )
+
+        # Give the lambda permission to write to the destination bucket
+        self.data_bucket.grant_read_write(shrink_jpg_lambda)
+        
+        shrink_jpg_lambda.add_event_source(lambda_sources.SqsEventSource(shrink_queue))
 
         return
