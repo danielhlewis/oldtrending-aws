@@ -310,7 +310,13 @@ class NewspaperCdkStack(cdk.Stack):
       start_task_lambda.add_event_source(lambda_sources.SnsEventSource(jpg_sns_topic))
 
     def buildCheckHeadlines(self):
-        banner_queue = sqs.Queue(self, 'BannerHeadlines')
+        dlq_sqs = sqs.Queue(
+          self, 'BannerHeadlinesDeadLetter',
+        )
+        dlq = sqs.DeadLetterQueue(max_receive_count=4, queue=dlq_sqs)
+        banner_queue = sqs.Queue(
+          self, 'BannerHeadlines', dead_letter_queue=dlq,
+        )
 
         # Now that we have the imagemagick layer, we can build the convert lambda on top of it
         check_headlines_lambda = PythonFunction(
