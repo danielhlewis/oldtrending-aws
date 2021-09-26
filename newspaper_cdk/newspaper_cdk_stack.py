@@ -125,8 +125,12 @@ class NewspaperCdkStack(cdk.Stack):
 
     def buildDownloadJP2AndFriends(self, input_topic):
         # Build input queue to subscribe to SNS topic for input
+        pages_dead_sqs = sqs.Queue(
+          self, 'DownloadQueueDeadLetter',
+        )
+        dlq = sqs.DeadLetterQueue(max_receive_count=4, queue=pages_dead_sqs)
         pages_sqs = sqs.Queue(
-          self, 'DownloadQueue',
+          self, 'DownloadQueue', dead_letter_queue=dlq,
         )
         input_topic.add_subscription(subs.SqsSubscription(pages_sqs))
 

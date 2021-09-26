@@ -32,14 +32,17 @@ def download_image(source, dest):
     print("Downloading image: %s" % source)
     logging.info("(%s) Downloading image: %s" % (datetime.datetime.today(), source))
     # pull image from url
+    print("Download Complete")
     r = requests.get(source, stream=True)
   # makes sure the request passed:
   if r.status_code == 200:
     s3 = boto3.client('s3')
     os.chdir('/tmp')
     tmp_name = os.path.basename(dest)
+    print("Writing to {}".format(tmp_name))
     with open(tmp_name, 'wb') as f:
         f.write(r.content)
+    print("Uploading to {}".format(dest))
     s3.upload_file(tmp_name, bucket_name, dest)
     return True
   else:
@@ -50,22 +53,23 @@ def download_image(source, dest):
 def handler(event, context):
   # target = event['target']
   # source_image = event['page']
-  event_body = json.loads(event["Records"][0]["body"])
-  print('Event Body: {}'.format(event_body))
-  message = json.loads(event_body['Message'])
-  print('Message: {}'.format(message))
-  target = message['target']
-  source = message['source']
-  dest = message['dest']
-  info = message['info']
-  bucket_dest = 'jp2/' + target+ '/' + dest
-  print('Target Date: {}'.format(target))
-  print('Source: {}'.format(source))
-  print('Dest: {}'.format(dest))
-  print('Info: {}'.format(info))
-  print('Bucket Dest: {}'.format(bucket_dest))
+  for record in event["Records"]:
+    event_body = json.loads(record["body"])
+    print('Event Body: {}'.format(event_body))
+    message = json.loads(event_body['Message'])
+    print('Message: {}'.format(message))
+    target = message['target']
+    source = message['source']
+    dest = message['dest']
+    info = message['info']
+    bucket_dest = 'jp2/' + target+ '/' + dest
+    print('Target Date: {}'.format(target))
+    print('Source: {}'.format(source))
+    print('Dest: {}'.format(dest))
+    print('Info: {}'.format(info))
+    print('Bucket Dest: {}'.format(bucket_dest))
 
-  download_image(source, bucket_dest)
+    download_image(source, bucket_dest)
 
   # Eventually, we might want to publish to a topic whether this worked or not, but for now
   # since we are using s3 triggers to do the rest of the pipeline, we don't need to notify anybody
