@@ -21,9 +21,11 @@ from aws_cdk import (
   aws_iam as iam,
   aws_autoscaling as autoscaling,
   aws_logs as logs,
+  aws_s3_deployment as s3_deployment,
 )
 
 from aws_cdk.aws_lambda_python import PythonFunction
+from aws_cdk.aws_s3_assets import Asset
 
 class NewspaperCdkStack(cdk.Stack):
 
@@ -40,7 +42,7 @@ class NewspaperCdkStack(cdk.Stack):
         # TODO - make new VPC
         self.vpc = ec2.Vpc.from_lookup(
           self, id='VPC', vpc_id='vpc-f1e6358c',
-          )
+        )
 
         # Setup: Create common storage. We will put data on it like so:
         # jp2/<date>/*.jp2
@@ -49,6 +51,13 @@ class NewspaperCdkStack(cdk.Stack):
         # resized/<date>/*.jpg
         # resized/<date>/images.json
         self.data_bucket = s3.Bucket(self, 'NewspaperDataPipeline')
+        self.web_bucket = s3.Bucket(self, 'NewspaperStaticSite', 
+                                      public_read_access=True,
+                                      website_index_document="spin.html",
+                                      removal_policy=cdk.RemovalPolicy.DESTROY,
+                                      auto_delete_objects=True)
+        s3_deployment.BucketDeployment(self, 'Deployment', destination_bucket=self.web_bucket,
+                                    sources=[s3_deployment.Source.asset("www")])
 
         # We need imagemagick to convert jp2 files into jpeg files
         #  Since it isn't included by default, we need to build it as
@@ -99,6 +108,18 @@ class NewspaperCdkStack(cdk.Stack):
         timeout=core.Duration.seconds(10)
       )
 
+      start_task_lambda = PythonFunction(
+        self, 'StartWorkflow',
+        runtime=_lambda.Runtime.PYTHON_3_8,
+        entry='start_workflow_lambda',
+        index='start_workflow.py',
+        handler='handler',
+        environment= {
+          'FIND_PAGES_LAMBDA': find_pages_lambda.function_name,
+        },
+      )
+
+      find_pages_lambda.grant_invoke(start_task_lambda)
       pages_topic.grant_publish(find_pages_lambda)
       return pages_topic
 
@@ -280,7 +301,7 @@ class NewspaperCdkStack(cdk.Stack):
       start_task_lambda.role.add_to_policy(iam.PolicyStatement(
         effect=iam.Effect.ALLOW,
         resources=['*'],
-        actions=['ecs:ListTasks'],
+        actions=['ecs:ListTasks', 'ecs:RunTask', 'iam:PassRole'],
       ))
       start_task_lambda.add_event_source(lambda_sources.SnsEventSource(jpg_sns_topic))
 
@@ -321,14 +342,16 @@ class NewspaperCdkStack(cdk.Stack):
           layers=[self.imagemagick_layer],
           environment= {
             'DATA_BUCKET': self.data_bucket.bucket_name,
+            'WEB_BUCKET': self.web_bucket.bucket_name,
           },
           timeout=core.Duration.seconds(30),
           memory_size=512,
         )
 
         # Give the lambda permission to write to the destination bucket
-        self.data_bucket.grant_read_write(shrink_jpg_lambda)
-        
+        self.data_bucket.grant_read(shrink_jpg_lambda)
+        self.web_bucket.grant_read_write(shrink_jpg_lambda)
+
         shrink_jpg_lambda.add_event_source(lambda_sources.SqsEventSource(shrink_queue))
 
         return

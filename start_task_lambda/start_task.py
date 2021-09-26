@@ -3,29 +3,28 @@ import logging
 import boto3
 
 cluster_name = os.environ.get('CLUSTER_NAME')
-container_id = os.environ.get('CONTAINER_ID')
+# container_id = os.environ.get('CONTAINER_ID')
 task_arn = os.environ.get('TASK_ARN')
 ecs = boto3.client('ecs')
 
-def start_task(cluster_name: str, container_id: str, task_arn: str):
-  response = ecs.start_task(cluster=cluster_name, 
-                            containerInstances=[container_id], 
-                            task_definition=task_arn)
+def run_task(cluster_name: str, task_arn: str):
+  response = ecs.run_task(cluster=cluster_name,
+                            taskDefinition=task_arn)
 
 def handler(event, context):
   print('Got Event: {}'.format(event))
   print('Environment Variables:')
   print('cluster_name: {}'.format(cluster_name))
-  print('container_id {}'.format(container_id))
+  # print('container_id {}'.format(container_id))
   print('task_arn {}'.format(task_arn))
   tasks_response = ecs.list_tasks(
     cluster=cluster_name
   )
   print('tasks_response: {}'.format(tasks_response))
-  # If the task is already running, don't bother trying to start it again
+  # If the task is already running, don't bother trying to run it again
   if task_arn not in tasks_response['taskArns']:
-    print('Starting task')
-    start_task(cluster_name, container_id, task_arn)
+    print('Running task')
+    run_task(cluster_name, task_arn)
   else:
     print('task already running, skipping')
 

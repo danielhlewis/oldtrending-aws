@@ -3,12 +3,31 @@ import json
 import boto3
 
 bucket_name = os.environ['DATA_BUCKET']
+web_bucket_name = os.environ['WEB_BUCKET']
 
-def shrink_jpg(bucket_name, key):
+def build_json(key):
+    (_, date, _) = key.split('/')
+    client = boto3.client('s3')
+    response = client.list_objects_v2(Bucket=web_bucket_name,
+                Prefix='images/%s/' % date)
+    print('{}'.format(response))
+    images = []
+    # try:
+    contents = response['Contents']
+    for x in contents:
+      images.append(x['Key'])
+    os.chdir('/tmp')
+    with open('images.json', 'w') as fout:
+      fout.write('{}'.format(json.dumps({'images': images})))
+    client.upload_file('/tmp/images.json', web_bucket_name, 'images/{}/images.json'.format(date))
+    # except Exception as e:
+    #   print("Error creating JSON file: %s" % e)
+
+def shrink_jpg(key):
     (_, date, filename) = key.split('/')
     basename = filename.split('.')[0]
     shrunken_name = basename + "-x720.jpg"
-    upload_key = "banner/" + date + "/" + filename
+    upload_key = "images/" + date + "/" + filename
     print('bucket_name: {}'.format(bucket_name))
     print('key: {}'.format(key))
     print('date: {}'.format(date))
@@ -21,7 +40,7 @@ def shrink_jpg(bucket_name, key):
     s3.Bucket(bucket_name).download_file(key, filename)
     command = "/opt/bin/convert -resize x720 %s %s " % (filename, shrunken_name)
     os.system(command)
-    s3.Bucket(bucket_name).upload_file(shrunken_name, upload_key)
+    s3.Bucket(web_bucket_name).upload_file(shrunken_name, upload_key)
     print("Success")
 
 def handler(event, context):
@@ -43,7 +62,8 @@ def handler(event, context):
   # print('Dest: {}'.format(dest))
   # print('Info: {}'.format(info))
 
-  shrink_jpg(bucket_name, key)
+  shrink_jpg(key)
+  build_json(key)
 
   return {
         'statusCode': 200,

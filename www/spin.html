@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Extra! Extra!</title>
+</head>
+<body>
+
+<div class="image-frame" />
+
+<style>
+  html {
+    background: #000000;
+    background-size: cover;
+    font-family: 'helvetica neue';
+    text-align: center;
+    font-size: 10px;
+  }
+
+  body {
+    font-size: 2rem;
+    min-height: 100vh;
+    align-items: center;
+    display: flex;
+  }
+
+  html, body {margin: 0; height: 100%; overflow: hidden}
+
+  .newspaper {
+    position: absolute;
+    /* z-index: -1; */
+  }
+
+  .image-frame {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .fitted {
+    width: 80%;
+    top: 0;
+  }
+
+  .hidden {
+    transform: scale(0%);
+  }
+
+  .active {
+    z-index: 255;
+  }
+
+</style>
+
+<script>
+  let imageSources;
+  let images = document.querySelectorAll('.newspaper');
+  const frame = document.querySelector('.image-frame');
+  console.log(frame);
+  let image;
+  let nextImageLoad = 0;
+
+  let startTransformMs;
+  let scaleRatio, scaledHeight, shiftTop;
+  let rotation = 0, rotationTarget;
+  const transformTimeMs = 1500;
+  const waitTimeMs = 3000;
+  // const waitTimeMs = 100;
+  let tilt = -1;
+
+  let activeImage = 0;
+
+  function buildUrl(filename) {
+    const exp = /(\d{4})(\d{2})(\d{2})(\d{2})-.*-(.*?)-.*?-(1).jpg/
+    let year, month, day, edition, lccn, seq;
+    [_, year, month, day, edition, lccn, seq] = filename.match(exp)
+    let url = `https://chroniclingamerica.loc.gov/lccn/${lccn}/${year}-${month}-${day}/ed-${edition}/seq-${seq}/`
+    return url
+  }
+
+  function resetZIndices() {
+    images.forEach((x) => x.style.zIndex = -1)
+  }
+
+  function openArticle() {
+    window.open(this.dataset['url'])
+  }
+
+  function activateImage() {
+    if (nextImageLoad < imageSources.length) {
+      //load the next image
+      imageElement = document.createElement('img');
+      imageElement.classList.add('newspaper');
+      imageElement.classList.add('fitted');
+      imageElement.style.transform = `scale(0%)`;
+      imageElement.setAttribute('data-url', buildUrl(imageSources[nextImageLoad]));
+      
+      frame.append(imageElement)
+      // frame.insertBefore(imageElement, frame.firstChild)
+      images = document.querySelectorAll('.newspaper');
+      // imageElement.style.zIndex = images.length - 1;
+
+      imageElement.addEventListener("click", openArticle);
+      imageElement.addEventListener("load", startTransform);
+      imageElement.src = imageSources[nextImageLoad++]
+    } else {
+      startTransform();
+    }
+  }
+
+  function startTransform() {
+    if (activeImage >= images.length) {
+      activeImage = 0;
+      resetZIndices();
+    }
+    image = images[activeImage++];
+    image.style.zIndex = activeImage;
+    image.classList.add('active');
+    rotationOffset = ((Math.random() * 3.5) + .5) * tilt;
+    tilt *= -1;
+    image.style.transform = `rotate(${rotationOffset}deg) scale(0%)`;
+    //Touch each z-index value to force a redraw, otherwise, the proper image
+    //  will sometimes not be moved to the top of the stack in firefox
+    var bars = 0;
+    images.forEach(x => {
+      bars += x.zIndex;
+    });
+    image.animate([
+      // keyframes
+      { transform: `translateY(-25%) rotate(${0 + rotationOffset}deg) scale(.01)` }, 
+      { transform: `translateY(0%) rotate(${360 + rotationOffset}deg) scale(.25)` },
+      { transform: `translateY(20%) rotate(${720 + rotationOffset}deg) scale(.5)` },
+      { transform: `translateY(10%) rotate(${1080 + rotationOffset}deg) scale(.75)` },
+      { transform: `translateY(0%) rotate(${1440 + rotationOffset}deg) scale(1)` }
+    ], { 
+      // timing options
+      duration: transformTimeMs,
+      iterations: 1
+    });
+    image.style.transform = `rotate(${rotationOffset}deg)`;
+    setTimeout(() => {
+      image.classList.remove('active');
+      // image.style.transform = `rotate(${rotationOffset}deg)`;
+    }, transformTimeMs)
+
+  }
+
+  function targetDate() {
+    var d = new Date(),
+        month = '' + (d.getMonth() + 1),
+        day = '' + d.getDate(),
+        year = d.getFullYear() - 100;
+
+    if (month.length < 2) month = '0' + month;
+    if (day.length < 2) day = '0' + day;
+
+    return [year, month, day].join('-');
+  }
+
+  fetch(`images/${targetDate()}/images.json`)
+    .then(response => response.json())
+    .then(json => {
+      // console.log(json); 
+      imageSources = json['images'];
+      // console.log(imageSources)
+      setTimeout(activateImage, 100);
+      setInterval(activateImage, transformTimeMs + waitTimeMs);
+    });
+
+  // resetZIndices();
+  // imageSources = ["resized/1920120901-ak_harborseal_ver04-sn87062168-00279526132-1.jpg", "resized/1920120901-ak_jellymoss_ver01-sn84020657-00279526867-1.jpg", "resized/1920120901-az_kitfox_ver01-sn84024827-00211106463-1.jpg", "resized/1920120901-ct_kent_ver01-sn92051227-00415620755-1.jpg", "resized/1920120901-deu_ironhill_ver01-sn85042354-00383342727-1.jpg", "resized/1920120901-fu_cedarkey_ver01-sn87062268-00271761156-1.jpg", "resized/1920120901-iahi_ames_ver01-sn85049804-00202198430-1.jpg", "resized/1920120901-iahi_ferguson_ver01-sn87057262-00295875288-1.jpg", "resized/1920120901-in_fairbanks_ver01-sn87055779-00296021544-1.jpg", "resized/1920120901-iune_gutter_ver02-sn92053933-00295878277-1.jpg", "resized/1920120901-iune_headline_ver02-sn92053241-00295873371-1.jpg", "resized/1920120901-mthi_bison_ver01-sn84024808-00295860716-1.jpg", "resized/1920120901-mthi_moose_ver01-sn83045085-00212476924-1.jpg", "resized/1920120901-nbu_indescribablebeast_ver01-00225879-00332899235-1.jpg", "resized/1920120901-nmu_dumas_ver01-sn84031081-00415627816-1.jpg", "resized/1920120901-nn_margalef_ver01-sn83030193-00237280799-1.jpg", "resized/1920120901-nvln_beatty_ver02-sn86076142-00415627063-1.jpg", "resized/1920120901-txdn_honda_ver02-sn85042551-00200294312-1.jpg", "resized/1920120901-txdn_hungary_ver01-sn88084272-00294553812-1.jpg", "resized/1920120901-uuml_kloeden_ver01-sn85058393-print-1.jpg", "resized/1920120901-vtu_fairbanks_ver02-sn90005351-00202197826-1.jpg", "resized/1920120901-wa_bainbridge_ver01-sn87093407-00200290860-1.jpg"];
+  // imageSources = ["resized/1920120901-ak_harborseal_ver04-sn87062168-00279526132-1.jpg", "resized/1920120901-ak_jellymoss_ver01-sn84020657-00279526867-1.jpg", "resized/1920120901-az_kitfox_ver01-sn84024827-00211106463-1.jpg", "resized/1920120901-ct_kent_ver01-sn92051227-00415620755-1.jpg"];
+  // setTimeout(activateImage, 100);
+  // setInterval(activateImage, transformTimeMs + waitTimeMs);
+</script>
+
+</body>
+</html>
+
