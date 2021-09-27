@@ -9,13 +9,14 @@ def build_json(key):
     (_, date, _) = key.split('/')
     client = boto3.client('s3')
     response = client.list_objects_v2(Bucket=web_bucket_name,
-                Prefix='images/%s/' % date)
+                Prefix='images/%s/' % date,)
     print('{}'.format(response))
     images = []
     # try:
     contents = response['Contents']
     for x in contents:
-      images.append(x['Key'])
+      if not x['Key'].split('/')[-1] == 'images.json':
+        images.append(x['Key'])
     os.chdir('/tmp')
     with open('images.json', 'w') as fout:
       fout.write('{}'.format(json.dumps({'images': images})))
