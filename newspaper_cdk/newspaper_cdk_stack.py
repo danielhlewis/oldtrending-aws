@@ -22,6 +22,7 @@ from aws_cdk import (
   aws_autoscaling as autoscaling,
   aws_logs as logs,
   aws_s3_deployment as s3_deployment,
+  aws_events, aws_events_targets,
 )
 
 from aws_cdk.aws_lambda_python import PythonFunction
@@ -32,12 +33,6 @@ class NewspaperCdkStack(cdk.Stack):
     def __init__(self, scope: cdk.Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # manifest_rds = rds.DatabaseInstance.from_database_instance_attributes(
-        #   self, 'manifest_rds',
-        #   instance_endpoint_address='newspaper-db.cx2rtxsijypk.us-east-1.rds.amazonaws.com',
-        #   instance_identifier='newspaper-db',
-        # )
-
         # Find the existing VPC to add to
         # TODO - make new VPC
         self.vpc = ec2.Vpc.from_lookup(
@@ -45,11 +40,11 @@ class NewspaperCdkStack(cdk.Stack):
         )
 
         # Setup: Create common storage. We will put data on it like so:
-        # jp2/<date>/*.jp2
-        # converted/<date>/*.jpg
-        # converted/<date>/*-predictions.json
-        # resized/<date>/*.jpg
-        # resized/<date>/images.json
+        # data_bucket:jp2/<date>/*.jp2
+        # data_bucket:converted/<date>/*.jpg
+        # data_bucket:converted/<date>/*-predictions.json
+        # web_bucket:resized/<date>/*.jpg
+        # web_bucket:resized/<date>/images.json
         self.data_bucket = s3.Bucket(self, 'NewspaperDataPipeline')
         self.web_bucket = s3.Bucket(self, 'NewspaperStaticSite', 
                                       public_read_access=True,
@@ -121,6 +116,22 @@ class NewspaperCdkStack(cdk.Stack):
 
       find_pages_lambda.grant_invoke(start_task_lambda)
       pages_topic.grant_publish(find_pages_lambda)
+
+      #Schedule start_task_lambda to run once per day
+      # see: https://stackoverflow.com/questions/59037512/how-to-run-lambda-created-in-cdk-on-a-regular-basis
+      # Pick a good time to run the workflow, 02:37 GMT sounds like a nice time
+      lambda_schedule = aws_events.Schedule.cron(hour='2', minute='37')
+      event_lambda_target = aws_events_targets.LambdaFunction(handler=start_task_lambda)
+      lambda_cw_event = aws_events.Rule(
+        self,
+        "Start_Workflow_Rule",
+        description=
+        "The once per day CloudWatch event trigger to start the processing workflow",
+        enabled=True,
+        schedule=lambda_schedule,
+        targets=[event_lambda_target]
+      )
+
       return pages_topic
 
     def buildDownloadJP2AndFriends(self, input_topic):
