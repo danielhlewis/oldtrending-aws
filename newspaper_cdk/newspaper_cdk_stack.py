@@ -29,7 +29,6 @@ from aws_cdk.aws_lambda_python import PythonFunction
 from aws_cdk.aws_s3_assets import Asset
 
 class NewspaperCdkStack(cdk.Stack):
-
     def __init__(self, scope: cdk.Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
