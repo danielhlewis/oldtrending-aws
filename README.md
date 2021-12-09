@@ -10,9 +10,13 @@ Two versions of this pipeline exist, one that packages the entire workflow into 
 Since it uses CDK, the entire project can be deployed onto AWS with a minimal amount of setup, but it currently requires a manually created RDS database.  To use it, you need to create an rds_config.py file in the get_pages_lambda folder with the following information
 
 db_host = "xxx.rds.amazonaws.com"
+
 db_username = ""
+
 db_password = ""
+
 db_name = "manifest"
+
 
 Here's a high level overview of the processing workflow:
 
