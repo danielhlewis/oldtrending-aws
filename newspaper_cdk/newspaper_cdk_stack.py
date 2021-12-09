@@ -23,6 +23,8 @@ from aws_cdk import (
   aws_logs as logs,
   aws_s3_deployment as s3_deployment,
   aws_events, aws_events_targets,
+  aws_cloudfront as cloudfront,
+  aws_cloudfront_origins as origins,
 )
 
 from aws_cdk.aws_lambda_python import PythonFunction
@@ -74,12 +76,14 @@ class NewspaperCdkStack(cdk.Stack):
         downloaded_topic = self.buildDownloadJP2AndFriends(pages_topic)
         # Step 3: Once the file is downloaded, convert from jp2 to jpg
         self.buildConvertJp2()
-        # Step 5: Create Image for Detectron
+        # Step 4: Create Image for Detectron
         self.buildProcessPages()
-        # Step 6: Check for banner headlines and resize files that have them
+        # Step 5: Check for banner headlines and resize files that have them
         shrink_queue = self.buildCheckHeadlines()
-        # Step 7: Shrink Files that have banner headlines to a reasonable size
+        # Step 6: Shrink Files that have banner headlines to a reasonable size
         self.buildShrinker(shrink_queue)
+        # Step 7: Configure Cloudfront
+        self.buildCloudfront()
 
 
     def buildGetPagesLambdaAndFriends(self):
@@ -375,3 +379,7 @@ class NewspaperCdkStack(cdk.Stack):
         shrink_jpg_lambda.add_event_source(lambda_sources.SqsEventSource(shrink_queue))
 
         return
+
+    def buildCloudfront(self):
+      cloudfront.Distribution(self, "cloudfrontDistro",
+        default_behavior=cloudfront.BehaviorOptions(origin=origins.S3Origin(self.web_bucket)))
